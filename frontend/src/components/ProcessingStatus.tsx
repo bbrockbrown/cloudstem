@@ -61,58 +61,76 @@ export default function ProcessingStatus({
 
   useEffect(() => {
     let ws: WebSocket | null = null;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
 
-    const connect = () => {
-      ws = new WebSocket(`${WS_URL}/api/ws/${trackingId}`);
+    const handleData = async (data: JobMessage & { error?: string }) => {
+      if ("error" in data && data.error) {
+        if (!closed) onError(data.error as string);
+        return;
+      }
+      if (data.currentStep) setCurrentStep(data.currentStep);
+      if (data.status === "Complete" && data.mp3Url && data.waveformUrl) {
+        const waveformRes = await fetch(data.waveformUrl);
+        const waveformData = (await waveformRes.json()) as WaveformData;
+        if (!closed)
+          onComplete(
+            data.mp3Url,
+            waveformData.points,
+            trackingId,
+            originalFileName,
+            data.encryptedUrl ?? "",
+          );
+      }
+      if (data.status === "Failed") {
+        if (!closed) onError(data.errorMessage ?? "Processing failed");
+      }
+    };
 
+    const poll = async () => {
+      if (closed) return;
+      try {
+        const res = await fetch(`${API_URL}/api/status/${trackingId}`);
+        if (res.ok) {
+          const data = (await res.json()) as JobMessage;
+          await handleData(data);
+          if (data.status === "Processing")
+            pollTimer = setTimeout(poll, 2000);
+        } else {
+          pollTimer = setTimeout(poll, 2000);
+        }
+      } catch {
+        if (!closed) pollTimer = setTimeout(poll, 2000);
+      }
+    };
+
+    // try WebSocket; fall back to polling on any error
+    try {
+      ws = new WebSocket(`${WS_URL}/api/ws/${trackingId}`);
       ws.onmessage = async (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data as string) as JobMessage & {
             error?: string;
           };
-
-          if ("error" in data && data.error) {
-            if (!closed) onError(data.error as string);
-            return;
-          }
-
-          if (data.currentStep) {
-            setCurrentStep(data.currentStep);
-          }
-
-          if (data.status === "Complete" && data.mp3Url && data.waveformUrl) {
-            const waveformRes = await fetch(data.waveformUrl);
-            const waveformData = (await waveformRes.json()) as WaveformData;
-            if (!closed) {
-              onComplete(
-                data.mp3Url,
-                waveformData.points,
-                trackingId,
-                originalFileName,
-                data.encryptedUrl ?? "",
-              );
-            }
-          }
-
-          if (data.status === "Failed") {
-            if (!closed) onError(data.errorMessage ?? "Processing failed");
-          }
+          await handleData(data);
         } catch {
           // ignore malformed messages
         }
       };
-
       ws.onerror = () => {
-        if (!closed) onError("Connection to server lost. Please try again.");
+        ws?.close();
+        ws = null;
+        if (!closed) pollTimer = setTimeout(poll, 0);
       };
-    };
-
-    connect();
+    } catch {
+      // WS URL invalid (e.g. empty string on HTTPS) — go straight to polling
+      pollTimer = setTimeout(poll, 0);
+    }
 
     return () => {
       closed = true;
       ws?.close();
+      if (pollTimer) clearTimeout(pollTimer);
     };
   }, [trackingId, originalFileName, onComplete, onError]);
 
