@@ -12,7 +12,13 @@ echo "[1/5] Updating system packages..."
 if command -v dnf &>/dev/null; then
   # Amazon Linux 2023 / Fedora
   dnf update -y
-  dnf install -y ffmpeg git
+  dnf install -y git
+  # ffmpeg is not in AL2023 default repos — install static binary
+  if ! command -v ffmpeg &>/dev/null; then
+    echo "       Installing ffmpeg static binary..."
+    curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+      | tar -xJ --wildcards --strip-components=1 -C /usr/local/bin '*/ffmpeg' '*/ffprobe'
+  fi
 elif command -v apt-get &>/dev/null; then
   # Ubuntu / Debian
   apt-get update -y
