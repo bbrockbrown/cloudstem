@@ -3,6 +3,7 @@ import {
   PutItemCommand,
   GetItemCommand,
   UpdateItemCommand,
+  ScanCommand,
 } from "@aws-sdk/client-dynamodb";
 import * as dotenv from "dotenv";
 import type { JobRecord, JobStatus } from "../util/types.js";
@@ -48,6 +49,7 @@ export const getJob = async (trackingId: string): Promise<JobRecord | null> => {
     status: (res.Item["status"]?.S ?? "Processing") as JobStatus,
     createdAt: res.Item["createdAt"]?.S ?? "",
     updatedAt: res.Item["updatedAt"]?.S,
+    currentStep: res.Item["currentStep"]?.S,
     mp3Key: res.Item["mp3Key"]?.S,
     waveformKey: res.Item["waveformKey"]?.S,
     encryptedKey: res.Item["encryptedKey"]?.S,
@@ -77,6 +79,48 @@ export const markJobCompleted = async (
         ":e": { S: encryptedKey },
       },
     }),
+  );
+};
+
+export const updateJobStep = async (
+  trackingId: string,
+  currentStep: string,
+): Promise<void> => {
+  await dynamoClient.send(
+    new UpdateItemCommand({
+      TableName: TABLE,
+      Key: { trackingId: { S: trackingId } },
+      UpdateExpression: "SET currentStep = :c, updatedAt = :t",
+      ExpressionAttributeValues: {
+        ":c": { S: currentStep },
+        ":t": { S: new Date().toISOString() },
+      },
+    }),
+  );
+};
+
+export const listJobs = async (): Promise<JobRecord[]> => {
+  let res;
+  try {
+    res = await dynamoClient.send(new ScanCommand({ TableName: TABLE }));
+  } catch (err) {
+    console.error("[listJobs] DynamoDB Scan error:", err);
+    throw err;
+  }
+  const items = (res.Items ?? []).map((item) => ({
+    trackingId: item["trackingId"]?.S ?? "",
+    originalFileName: item["originalFileName"]?.S ?? "",
+    status: (item["status"]?.S ?? "Processing") as JobStatus,
+    createdAt: item["createdAt"]?.S ?? "",
+    updatedAt: item["updatedAt"]?.S,
+    currentStep: item["currentStep"]?.S,
+    mp3Key: item["mp3Key"]?.S,
+    waveformKey: item["waveformKey"]?.S,
+    encryptedKey: item["encryptedKey"]?.S,
+    errorMessage: item["errorMessage"]?.S,
+  }));
+  return items.sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
 };
 

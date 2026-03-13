@@ -8,7 +8,7 @@ dotenv.config();
 export const queueAudioForProcessing = async (
   trackingId: string,
   originalFileName: string,
-  localFilePath: string,
+  s3RawKey: string,
 ): Promise<void> => {
   const queueUrl = process.env.SQS_QUEUE_URL;
   if (!queueUrl) {
@@ -19,7 +19,7 @@ export const queueAudioForProcessing = async (
   const messageBody = JSON.stringify({
     trackingId,
     originalFileName,
-    localFilePath,
+    s3RawKey,
     timestamp: new Date().toISOString(),
   });
 

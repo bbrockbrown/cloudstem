@@ -6,6 +6,7 @@ export interface JobRecord {
   status: JobStatus;
   createdAt: string;
   updatedAt?: string;
+  currentStep?: string;
   mp3Key?: string;
   waveformKey?: string;
   encryptedKey?: string;

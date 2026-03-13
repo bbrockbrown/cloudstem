@@ -3,12 +3,21 @@ import {
   DeleteMessageCommand,
 } from "@aws-sdk/client-sqs";
 import { sqsClient } from "../config/aws.js";
-import { uploadFileToS3, uploadBufferToS3 } from "./s3Service.js";
-import { markJobCompleted, markJobFailed } from "./dynamoService.js";
+import {
+  uploadFileToS3,
+  uploadBufferToS3,
+  downloadFileFromS3,
+} from "./s3Service.js";
+import {
+  markJobCompleted,
+  markJobFailed,
+  updateJobStep,
+} from "./dynamoService.js";
 import ffmpeg from "fluent-ffmpeg";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -22,11 +31,10 @@ if (!ENCRYPTION_KEY_HEX) throw new Error("ENCRYPTION_KEY not set in .env");
 interface SQSPayload {
   trackingId: string;
   originalFileName: string;
-  localFilePath: string;
+  s3RawKey: string;
   timestamp: string;
 }
 
-// transcode .wav -> .mp3 at 320kbps for now
 const transcodeToMp3 = (inputPath: string, outputPath: string): Promise<void> =>
   new Promise((resolve, reject) => {
     ffmpeg(inputPath)
@@ -38,7 +46,6 @@ const transcodeToMp3 = (inputPath: string, outputPath: string): Promise<void> =>
       .save(outputPath);
   });
 
-// convert to raw 16-bit PCM, sample N amplitude points for waveform visualization
 const generateWaveform = (
   inputPath: string,
   numPoints = 300,
@@ -65,7 +72,7 @@ const generateWaveform = (
                 if (sample > peak) peak = sample;
               }
             }
-            waveform.push(peak / 32768); // normalize to 0–1
+            waveform.push(peak / 32768);
           }
           resolve(waveform);
         } catch (err) {
@@ -76,7 +83,6 @@ const generateWaveform = (
       .save(pcmPath);
   });
 
-// encrypt the file IV is prepended to the output file
 const encryptFile = (inputPath: string, outputPath: string): void => {
   const key = Buffer.from(ENCRYPTION_KEY_HEX, "hex");
   const iv = crypto.randomBytes(16);
@@ -97,31 +103,48 @@ const cleanUp = (...paths: string[]): void => {
 };
 
 const processJob = async (payload: SQSPayload): Promise<void> => {
-  const { trackingId, originalFileName, localFilePath } = payload;
-  const baseName = path.parse(trackingId).name; // UUID without extension
-  const dir = path.dirname(localFilePath);
-  const mp3Path = path.join(dir, `${baseName}.mp3`);
-  const encPath = path.join(dir, `${baseName}.enc`);
+  const { trackingId, originalFileName, s3RawKey } = payload;
+  const ext = path.extname(originalFileName) || ".wav";
+  const workDir = path.join(os.tmpdir(), `cloudstem-${trackingId}`);
+  fs.mkdirSync(workDir, { recursive: true });
+
+  const rawPath = path.join(workDir, `input${ext}`);
+  const mp3Path = path.join(workDir, `output.mp3`);
+  const encPath = path.join(workDir, `output.enc`);
+  const baseName = path.parse(trackingId).name;
 
   try {
     console.log(`[worker] Processing ${trackingId} (${originalFileName})`);
 
-    console.log("[worker] Transcoding to MP3...");
-    await transcodeToMp3(localFilePath, mp3Path);
+    // uplaod to s3 + update job step
+    await updateJobStep(trackingId, "Downloading from S3...");
+    console.log("[worker] Downloading raw file from S3...");
+    await downloadFileFromS3(s3RawKey, rawPath);
 
+    // transcode + update job step
+    await updateJobStep(trackingId, "Transcoding to MP3...");
+    console.log("[worker] Transcoding to MP3...");
+    await transcodeToMp3(rawPath, mp3Path);
+
+    // generate waveform + update job step
+    await updateJobStep(trackingId, "Generating waveform...");
     console.log("[worker] Generating waveform...");
-    const waveformPoints = await generateWaveform(localFilePath);
+    const waveformPoints = await generateWaveform(rawPath);
     const waveformBuffer = Buffer.from(
       JSON.stringify({ points: waveformPoints }),
     );
 
+    // encrypt master/.wav + update job step
+    await updateJobStep(trackingId, "Encrypting original...");
     console.log("[worker] Encrypting original...");
-    encryptFile(localFilePath, encPath);
+    encryptFile(rawPath, encPath);
 
     const mp3Key = `transcoded/${baseName}.mp3`;
     const waveformKey = `waveforms/${baseName}.json`;
     const encryptedKey = `encrypted/${baseName}.enc`;
 
+    // upload transcoded, waveform, and encrypted to s3 + update job step
+    await updateJobStep(trackingId, "Uploading to S3...");
     console.log("[worker] Uploading to S3...");
     await Promise.all([
       uploadFileToS3(mp3Path, mp3Key, "audio/mpeg"),
@@ -129,15 +152,26 @@ const processJob = async (payload: SQSPayload): Promise<void> => {
       uploadFileToS3(encPath, encryptedKey, "application/octet-stream"),
     ]);
 
+    // completed job
     await markJobCompleted(trackingId, mp3Key, waveformKey, encryptedKey);
     console.log(`[worker] Job ${trackingId} completed.`);
 
-    cleanUp(localFilePath, mp3Path, encPath);
+    cleanUp(rawPath, mp3Path, encPath);
+    try {
+      fs.rmdirSync(workDir);
+    } catch {
+      /* ignore */
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[worker] Job ${trackingId} failed:`, msg);
     await markJobFailed(trackingId, msg);
-    cleanUp(mp3Path, encPath); // leave original for debugging
+    cleanUp(mp3Path, encPath);
+    try {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
     throw err;
   }
 };
@@ -146,18 +180,16 @@ const poll = async (): Promise<void> => {
   console.log("[worker] SQS poller started.");
   while (true) {
     try {
-      // check on the queue
       const result = await sqsClient.send(
         new ReceiveMessageCommand({
           QueueUrl: QUEUE_URL,
           MaxNumberOfMessages: 1,
-          WaitTimeSeconds: 20, // long polling
+          WaitTimeSeconds: 20,
         }),
       );
 
       if (!result.Messages?.length) continue;
 
-      // go thru received messages
       for (const message of result.Messages) {
         if (!message.Body || !message.ReceiptHandle) continue;
 
@@ -175,7 +207,6 @@ const poll = async (): Promise<void> => {
           continue;
         }
 
-        // we know the payload will be a job, process it
         try {
           await processJob(payload);
         } catch {
@@ -192,7 +223,7 @@ const poll = async (): Promise<void> => {
       }
     } catch (err) {
       console.error("[worker] Poll error:", err);
-      await new Promise((r) => setTimeout(r, 5000)); // back off before retry
+      await new Promise((r) => setTimeout(r, 5000));
     }
   }
 };

@@ -4,6 +4,7 @@ import {
   handleAudioUpload,
 } from "../controllers/uploadController.js";
 import { getJobStatus } from "../controllers/statusController.js";
+import { getJobHistory } from "../controllers/historyController.js";
 
 const router = Router();
 
@@ -11,5 +12,7 @@ const router = Router();
 router.post("/upload", uploadMiddleware, handleAudioUpload);
 // check status of a specific song/job
 router.get("/status/:trackingId", getJobStatus);
+// list all jobs
+router.get("/history", getJobHistory);
 
 export default router;
