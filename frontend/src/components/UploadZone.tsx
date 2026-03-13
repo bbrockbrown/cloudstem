@@ -110,7 +110,9 @@ export default function UploadZone({ onFileSelected }: Props) {
             </p>
             <p className="text-zinc-500 text-sm mt-1">or click to browse</p>
           </div>
-          <p className="text-zinc-600 text-xs">WAV files only · up to 2 GB</p>
+          <p className="text-zinc-600 text-xs">
+            WAV files only &bull; up to 2 GB
+          </p>
         </div>
       </div>
 

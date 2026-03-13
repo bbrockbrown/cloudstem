@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import UploadZone from "./UploadZone";
 import ProcessingStatus from "./ProcessingStatus";
 import AudioPlayer from "./AudioPlayer";
+import JobHistory from "./JobHistory";
 
 type AppState =
   | { stage: "idle" }
@@ -15,6 +16,7 @@ type AppState =
       originalFileName: string;
       mp3Url: string;
       waveformPoints: number[];
+      encryptedUrl: string;
     }
   | { stage: "error"; message: string };
 
@@ -22,6 +24,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export default function CloudStemApp() {
   const [state, setState] = useState<AppState>({ stage: "idle" });
+  const [showHistory, setShowHistory] = useState(false);
 
   const handleFileSelected = useCallback(async (file: File) => {
     setState({ stage: "uploading" });
@@ -55,6 +58,7 @@ export default function CloudStemApp() {
       waveformPoints: number[],
       trackingId: string,
       originalFileName: string,
+      encryptedUrl: string,
     ) => {
       setState({
         stage: "complete",
@@ -62,6 +66,7 @@ export default function CloudStemApp() {
         waveformPoints,
         trackingId,
         originalFileName,
+        encryptedUrl,
       });
     },
     [],
@@ -75,9 +80,34 @@ export default function CloudStemApp() {
     setState({ stage: "idle" });
   }, []);
 
+  const handleLoadJob = useCallback(
+    async (trackingId: string, originalFileName: string) => {
+      const res = await fetch(`${API_URL}/api/status/${trackingId}`);
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        mp3Url?: string;
+        waveformUrl?: string;
+        encryptedUrl?: string;
+      };
+      if (!data.mp3Url || !data.waveformUrl) return;
+      const wfRes = await fetch(data.waveformUrl);
+      const wfData = (await wfRes.json()) as { points: number[] };
+      setState({
+        stage: "complete",
+        trackingId,
+        originalFileName,
+        mp3Url: data.mp3Url,
+        waveformPoints: wfData.points,
+        encryptedUrl: data.encryptedUrl ?? "",
+      });
+      setShowHistory(false);
+    },
+    [],
+  );
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-50 flex flex-col">
-      {/* Header */}
+      {/* header */}
       <header className="border-b border-zinc-800 px-6 py-4">
         <div className="max-w-3xl mx-auto flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-purple-600 flex items-center justify-center">
@@ -90,15 +120,32 @@ export default function CloudStemApp() {
               />
             </svg>
           </div>
-          <span className="font-semibold text-lg tracking-tight">
+          <span className="font-semibold text-lg tracking-tight flex-1">
             CloudStem
           </span>
+          <button
+            onClick={() => setShowHistory((v) => !v)}
+            className={[
+              "text-sm px-3 py-1.5 rounded-lg border transition-colors",
+              showHistory
+                ? "bg-purple-700 border-purple-600 text-white"
+                : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200",
+            ].join(" ")}
+          >
+            Library
+          </button>
         </div>
       </header>
 
-      {/* Main content */}
+      {/* main content */}
       <main className="flex-1 flex items-center justify-center px-6 py-16">
         <div className="w-full max-w-2xl">
+          {showHistory && (
+            <div className="mb-8">
+              <h2 className="text-zinc-300 font-medium mb-4">Library</h2>
+              <JobHistory onLoad={handleLoadJob} />
+            </div>
+          )}
           {state.stage === "idle" && (
             <UploadZone onFileSelected={handleFileSelected} />
           )}
@@ -126,12 +173,13 @@ export default function CloudStemApp() {
                 waveformPoints={state.waveformPoints}
                 originalFileName={state.originalFileName}
                 trackingId={state.trackingId}
+                encryptedUrl={state.encryptedUrl}
               />
               <button
                 onClick={handleReset}
                 className="mt-8 mx-auto flex items-center gap-2 text-zinc-500 hover:text-zinc-300 transition-colors text-sm"
               >
-                ← Upload another file
+                &larr; Upload another file
               </button>
             </div>
           )}
