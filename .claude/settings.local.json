@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/brockbrown/Desktop/projects/school/classes/cs310/final-project show 4f5b3fe --name-status)",
+      "Bash(git -C /Users/brockbrown/Desktop/projects/school/classes/cs310/final-project show HEAD:scripts/ec2-setup.sh)"
+    ]
+  }
+}

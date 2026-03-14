@@ -21,10 +21,8 @@ export default function JobHistory({ onLoad }: Props) {
   const [loading, setLoading] = useState(true);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
-  const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
   useEffect(() => {
-    fetch(`${API_URL}/api/history`)
+    fetch(`/api/history`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -32,7 +30,7 @@ export default function JobHistory({ onLoad }: Props) {
       .then((data) => setJobs(Array.isArray(data) ? (data as JobRecord[]) : []))
       .catch(() => setJobs([]))
       .finally(() => setLoading(false));
-  }, [API_URL]);
+  }, []);
 
   const handleLoad = async (job: JobRecord) => {
     setLoadingId(job.trackingId);

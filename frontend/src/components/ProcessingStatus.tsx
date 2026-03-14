@@ -31,10 +31,6 @@ interface Props {
   onError: (message: string) => void;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
-const WS_URL = API_URL.replace(/^http/, "ws");
-
 const STEP_LABELS: Record<string, string> = {
   "Downloading from S3...": "Downloading",
   "Transcoding to MP3...": "Transcoding",
@@ -90,7 +86,7 @@ export default function ProcessingStatus({
     const poll = async () => {
       if (closed) return;
       try {
-        const res = await fetch(`${API_URL}/api/status/${trackingId}`);
+        const res = await fetch(`/api/status/${trackingId}`);
         if (res.ok) {
           const data = (await res.json()) as JobMessage;
           await handleData(data);
@@ -106,7 +102,8 @@ export default function ProcessingStatus({
 
     // try WebSocket; fall back to polling on any error
     try {
-      ws = new WebSocket(`${WS_URL}/api/ws/${trackingId}`);
+      const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      ws = new WebSocket(`${wsProto}//${window.location.host}/api/ws/${trackingId}`);
       ws.onmessage = async (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data as string) as JobMessage & {

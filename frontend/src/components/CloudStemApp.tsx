@@ -20,8 +20,6 @@ type AppState =
     }
   | { stage: "error"; message: string };
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
 export default function CloudStemApp() {
   const [state, setState] = useState<AppState>({ stage: "idle" });
   const [showHistory, setShowHistory] = useState(false);
@@ -32,7 +30,7 @@ export default function CloudStemApp() {
       const formData = new FormData();
       formData.append("audioFile", file);
 
-      const res = await fetch(`${API_URL}/api/upload`, {
+      const res = await fetch(`/api/upload`, {
         method: "POST",
         body: formData,
       });
@@ -82,7 +80,7 @@ export default function CloudStemApp() {
 
   const handleLoadJob = useCallback(
     async (trackingId: string, originalFileName: string) => {
-      const res = await fetch(`${API_URL}/api/status/${trackingId}`);
+      const res = await fetch(`/api/status/${trackingId}`);
       if (!res.ok) return;
       const data = (await res.json()) as {
         mp3Url?: string;
